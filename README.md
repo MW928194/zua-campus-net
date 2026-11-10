@@ -67,9 +67,16 @@ A：先点“打开日志”看最后几行：
 
 应急方案：用 Edge 手动点两下登录（自动填充还留着）。
 
-**Q：杀毒软件/Windows 提示风险？**
-A：本项目是明文 PowerShell 脚本，安装的是 SYSTEM 计划任务与自启动脚本，部分安全软件会提示。
-请先阅读源码确认；被拦截时选择“允许/信任”。
+**Q：杀毒软件报毒 / 文件被火绒删了？**
+A：这是**行为敏感导致的误报**，不是真的有病毒。本工具会注册 SYSTEM 开机计划任务、用后台隐藏窗口运行 PowerShell、保存账号密码——这些行为和恶意软件的"持久化"很像，所以会被火绒/Defender 拦截。处理办法：
+1. 火绒 → **病毒查杀 → 隔离区 → 恢复** 被删文件；
+2. 火绒 → **病毒查杀 → 信任区 → 添加文件夹**，把解压目录加信任；
+3. 重新运行 `启动.bat`。
+
+详细说明（含如何确认安全、如何向火绒提交误报）见
+[docs/antivirus-false-positive.md](docs/antivirus-false-positive.md)；
+解压包里的 `先看这里-安全说明.txt` 也有简短版。
+**请只添加信任，不要关闭杀毒软件的整体防护。**
 
 **Q：如何卸载？**
 A：打开本工具点“卸载”；或删除计划任务 `CampusNet-AutoLogin` 后删除 `C:\CampusNet`。
@@ -103,6 +110,7 @@ A：见 [docs/how-it-works.md](docs/how-it-works.md)，把 `config.json` 里的�
 ```
 zua-campus-net/
 ├─ 启动.bat                    # 双击启动（会请求管理员权限）
+├─ 先看这里-安全说明.txt        # 被火绒/Defender 拦了先看这个
 ├─ src/
 │  ├─ app/CampusNet-GUI.ps1    # 图形界面
 │  └─ runtime/
@@ -111,6 +119,7 @@ zua-campus-net/
 │     ├─ login.ps1             # 常驻守护：检测 + 自动登录
 │     └─ test.ps1              # 真实断网回环测试
 ├─ docs/how-it-works.md        # 协议细节与设计说明
+├─ docs/antivirus-false-positive.md  # 杀毒软件误报说明（含提交误报模板）
 └─ LICENSE                     # MIT
 ```
 
