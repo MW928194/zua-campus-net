@@ -18,7 +18,8 @@ param(
     [switch]$Once,       # 只跑一轮（手动测试用）
     [switch]$Force,      # 已在线也强制发一次登录请求（验证请求格式/密码）
     [switch]$Diagnose,   # 只打印诊断信息，不登录
-    [switch]$Console     # 同时输出到控制台
+    [switch]$Console,    # 同时输出到控制台
+    [switch]$IgnorePause # 忽略 pause.flag（断网测试用；-Once 专用）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -193,8 +194,12 @@ $lastState = ''
 Write-Log 'watcher started v1.2.0'
 while ($true) {
     try {
-        if (Test-Path $script:PauseFile) {
-            if ($lastState -ne 'paused') { Write-Log '检测到 pause.flag，暂停自动登录'; $lastState = 'paused' }
+        if ((Test-Path $script:PauseFile) -and -not $IgnorePause) {
+            if ($lastState -ne 'paused') {
+                Write-Log '检测到 pause.flag，暂停自动登录'
+                $lastState = 'paused'
+                if ($Once) { Write-Log '（-Once 模式遇到暂停标记，退出）'; exit 3 }
+            }
             Start-Sleep -Seconds 10
             continue
         }

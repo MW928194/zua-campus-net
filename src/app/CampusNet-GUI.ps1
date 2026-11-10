@@ -19,7 +19,7 @@ $script:RepoRoot      = Split-Path -Parent $script:SrcDir
 $script:RuntimeSource = Join-Path $script:SrcDir 'runtime'
 $script:CampusTargetDir = 'C:\CampusNet'
 $script:CampusTaskName  = 'CampusNet-AutoLogin'
-$script:Version = '1.2.1'
+$script:Version = '1.2.2'
 $script:ProjectName = '郑航校园网自动登录'
 
 Add-Type -AssemblyName System.Windows.Forms

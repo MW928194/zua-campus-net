@@ -108,10 +108,28 @@ try {
     $result = 1
     if ($offlineAfterLogout) {
         Say '--- 运行 login.ps1 -Once（真实离线 → 自动登录） ---'
-        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $loginPs1 -Once -Console 2>&1 | Out-String
-        $code = $LASTEXITCODE
-        Say $out.Trim()
-        Say "login.ps1 退出码: $code"
+        $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $loginPs1 + '"'), '-Once', '-IgnorePause')
+        $code = -1
+        try {
+            $child = Start-Process -FilePath 'powershell.exe' -ArgumentList $childArgs -WindowStyle Hidden -PassThru -ErrorAction Stop
+            $finished = $child.WaitForExit(120000)
+            if ($finished) {
+                $code = $child.ExitCode
+            } else {
+                try { $child.Kill() } catch {}
+                Say 'login.ps1 运行超时（>120 秒），已强制结束'
+                $code = 124
+            }
+        } catch {
+            Say ('启动 login.ps1 失败：' + $_.Exception.Message)
+            $code = -1
+        }
+        Say ('login.ps1 退出码: ' + $code)
+        Say '--- login.log 最后 12 行 ---'
+        $logFile = Join-Path $scriptDir 'login.log'
+        if (Test-Path $logFile) {
+            try { Get-Content -LiteralPath $logFile -Encoding UTF8 -Tail 12 | ForEach-Object { Say $_ } } catch {}
+        }
 
         $final = $null
         for ($i = 0; $i -lt 15; $i++) {
@@ -145,5 +163,13 @@ try {
         Remove-Item -LiteralPath $pauseFile -Force -ErrorAction SilentlyContinue
         Say '已恢复后台守护进程（删除 pause.flag）'
     }
+    # 兜底：确保后台守护任务处于运行状态（如果没在运行就重新拉起）
+    try {
+        $task = Get-ScheduledTask -TaskName 'CampusNet-AutoLogin' -ErrorAction SilentlyContinue
+        if ($task -and $task.State -ne 'Running') {
+            Start-ScheduledTask -TaskName 'CampusNet-AutoLogin'
+            Say '已重新启动后台守护进程（计划任务）'
+        }
+    } catch {}
 }
 exit $result
