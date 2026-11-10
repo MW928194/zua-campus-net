@@ -190,7 +190,7 @@ if (-not $Once -and -not $Force) {
 
 $fail = 0
 $lastState = ''
-Write-Log 'watcher started v1.1'
+Write-Log 'watcher started v1.2.0'
 while ($true) {
     try {
         if (Test-Path $script:PauseFile) {

@@ -1,0 +1,12 @@
+# 运行时/构建产物
+*.log
+cred.dat
+config.json
+pause.flag
+测试报告.txt
+*.zip
+
+# 系统文件
+Thumbs.db
+.DS_Store
+desktop.ini

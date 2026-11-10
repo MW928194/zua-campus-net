@@ -19,7 +19,7 @@ $script:RepoRoot      = Split-Path -Parent $script:SrcDir
 $script:RuntimeSource = Join-Path $script:SrcDir 'runtime'
 $script:CampusTargetDir = 'C:\CampusNet'
 $script:CampusTaskName  = 'CampusNet-AutoLogin'
-$script:Version = '1.1.0'
+$script:Version = '1.2.0'
 $script:ProjectName = '郑航校园网自动登录'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -239,9 +239,15 @@ function New-MainForm {
     $script:txtLog.ReadOnly = $true
     $script:txtLog.ScrollBars = 'Vertical'
     $script:txtLog.Location = New-Object System.Drawing.Point(12, 24)
-    $script:txtLog.Size = New-Object System.Drawing.Size(592, 96)
+    $script:txtLog.Size = New-Object System.Drawing.Size(480, 96)
     if ($fontMono) { $script:txtLog.Font = $fontMono }
     $grpLog.Controls.Add($script:txtLog)
+
+    $script:btnCopyLog = New-Object System.Windows.Forms.Button
+    $script:btnCopyLog.Text = '复制日志'
+    $script:btnCopyLog.Location = New-Object System.Drawing.Point(500, 26)
+    $script:btnCopyLog.Size = New-Object System.Drawing.Size(80, 30)
+    $grpLog.Controls.Add($script:btnCopyLog)
 
     # ---- 底部 ----
     $linkHelp = New-Object System.Windows.Forms.LinkLabel
@@ -264,6 +270,22 @@ function New-MainForm {
     # ---- 事件 ----
     $script:chkShow.Add_CheckedChanged({
         $script:txtPwd.UseSystemPasswordChar = -not $script:chkShow.Checked
+    })
+
+    $script:btnCopyLog.Add_Click({
+        try {
+            [System.Windows.Forms.Clipboard]::SetText($script:txtLog.Text)
+            Append-Log '日志已复制到剪贴板'
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show('复制失败：' + $_.Exception.Message, '提示', 'OK', 'Warning') | Out-Null
+        }
+    })
+
+    $script:txtUser.Add_KeyDown({
+        if ($_.KeyCode -eq [System.Windows.Forms.Keys]::Enter) { Do-Install }
+    })
+    $script:txtPwd.Add_KeyDown({
+        if ($_.KeyCode -eq [System.Windows.Forms.Keys]::Enter) { Do-Install }
     })
 
     $script:btnRefresh.Add_Click({
@@ -331,6 +353,7 @@ function Update-Status {
         }
 
         $script:btnPause.Text = if ($info.Paused) { '恢复自动登录' } else { '暂停自动登录' }
+        if ($info.Installed) { $script:btnInstall.Text = '更新凭据 / 重装' } else { $script:btnInstall.Text = '一键安装' }
 
         $last = ''
         if ($info.LogTail.Count -gt 0) { $last = [string]$info.LogTail[-1] }
@@ -400,6 +423,18 @@ function Do-Install {
     $script:btnInstall.Enabled = $false
     $script:form.UseWaitCursor = $true
     try {
+        Append-Log '检查校园网连接状态...'
+        [System.Windows.Forms.Application]::DoEvents()
+        $st = Get-PortalState -TimeoutSec 3
+        if ($st.State -eq 'Unreachable') {
+            $ans = [System.Windows.Forms.MessageBox]::Show(
+                "当前似乎没有连接校园网（ZUA-Student），无法向学校服务器校验密码。`r`n`r`n建议先连上校园网再安装；也可以继续，但密码要等有网时才能验证。`r`n`r`n仍然继续安装吗？",
+                '网络提示', 'YesNo', 'Warning')
+            if ($ans -ne 'Yes') {
+                Append-Log '已取消安装（未连接校园网）'
+                return
+            }
+        }
         Append-Log '正在向学校认证服务器校验账号密码（几秒钟）...'
         [System.Windows.Forms.Application]::DoEvents()
         $check = Test-CampusPassword -UserId $uid -Password $pwd
@@ -414,7 +449,16 @@ function Do-Install {
         [System.Windows.Forms.Application]::DoEvents()
         $info = Install-CampusNet -UserId $uid -Password $pwd
         $script:txtPwd.Clear()
-        Append-Log '安装完成，守护进程已启动。'
+        Append-Log '安装完成，守护进程已启动。正在做安装后自检...'
+        [System.Windows.Forms.Application]::DoEvents()
+        try {
+            $diag = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $script:CampusTargetDir 'login.ps1') -Diagnose 2>&1 | Out-String
+            foreach ($line in ($diag -split "`r?`n")) {
+                if ($line.Trim()) { Append-Log $line.Trim() }
+            }
+        } catch {
+            Append-Log ('安装后自检失败：' + $_.Exception.Message)
+        }
         [System.Windows.Forms.MessageBox]::Show(
             "安装成功！`r`n`r`n· 现在是：随时保持在线，掉线自动重连`r`n· 明天开机：锁屏界面就会自动登录，解锁即已联网`r`n`r`n建议点「真实断网测试」验证一次（约断网 10~30 秒）。",
             '安装成功', 'OK', 'Information') | Out-Null
@@ -549,9 +593,20 @@ ZUA-Student 校园网的网页认证；网络掉线后也会自动重连。
     [System.Windows.Forms.MessageBox]::Show($msg, '说明 / 常见问题', 'OK', 'Information') | Out-Null
 }
 
+function Prefill-Account {
+    try {
+        $credFile = Join-Path $script:CampusTargetDir 'cred.dat'
+        if ((Test-Path $credFile) -and -not $script:txtUser.Text.Trim()) {
+            $c = Get-Content -LiteralPath $credFile -Raw | ConvertFrom-Json
+            if ($c.userId) { $script:txtUser.Text = [string]$c.userId }
+        }
+    } catch {}
+}
+
 function Start-Main {
     $form = New-MainForm
     $form.Add_Shown({
+        Prefill-Account
         Update-Status
         Update-NetStatus
         $script:timer.Start()
