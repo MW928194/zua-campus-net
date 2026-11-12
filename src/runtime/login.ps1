@@ -145,15 +145,22 @@ function Try-Login {
 
     $hasSuccess = ($resp.Content -match 'id="auth_success"|id="connUserId"')
     $hasLoginForm = ($resp.Content -match 'id="goLoginForm"')
-    for ($i = 0; $i -lt 3; $i++) {
+    # 成功判定：以"真实能上网"为准（门户状态可能残留旧会话，见 v1.2.3 修复）
+    $reachable = $false
+    for ($i = 0; $i -lt 5; $i++) {
         Start-Sleep -Milliseconds 1000
+        if (Test-InternetReachable) { $reachable = $true; break }
+    }
+    if (-not $reachable) {
+        # 兜底：个别网络会拦截连通性探测；门户确认在线且响应含成功标记时也视为成功
         $st = Get-PortalState
-        if ($st.State -eq 'Online') {
-            return [pscustomobject]@{
-                Success = $true; Message = "登录成功（POST HTTP $($resp.Status)）"
-                ResponseStatus = $resp.Status; ResponseLength = $resp.Content.Length
-                ErrorText = ''; HasSuccessMarker = $hasSuccess; HasLoginForm = $hasLoginForm
-            }
+        if ($st.State -eq 'Online' -and $hasSuccess) { $reachable = $true }
+    }
+    if ($reachable) {
+        return [pscustomobject]@{
+            Success = $true; Message = "登录成功（POST HTTP $($resp.Status)）"
+            ResponseStatus = $resp.Status; ResponseLength = $resp.Content.Length
+            ErrorText = ''; HasSuccessMarker = $hasSuccess; HasLoginForm = $hasLoginForm
         }
     }
     $err = Extract-PortalError -Html $resp.Content
@@ -191,7 +198,7 @@ if (-not $Once -and -not $Force) {
 
 $fail = 0
 $lastState = ''
-Write-Log 'watcher started v1.2.0'
+Write-Log 'watcher started v1.2.3'
 while ($true) {
     try {
         if ((Test-Path $script:PauseFile) -and -not $IgnorePause) {
@@ -205,10 +212,38 @@ while ($true) {
         }
         $st = Get-PortalState
         if ($st.State -eq 'Online') {
-            if ($lastState -ne 'online') { Write-Log '网络已在线'; $lastState = 'online' }
-            $fail = 0
-            if ($Once) { exit 0 }
-            Start-Sleep -Seconds ([int]$script:cfg.onlineCheckSeconds)
+            # 二次确认：门户说在线，还要真的能上网（防止门户/BRAS 会话状态残留）
+            if (Test-InternetReachable) {
+                if ($lastState -ne 'online') { Write-Log '网络已在线'; $lastState = 'online' }
+                $fail = 0
+                if ($Once) { exit 0 }
+                Start-Sleep -Seconds ([int]$script:cfg.onlineCheckSeconds)
+                continue
+            }
+            # 门户残留"在线"但实际被网关拦截：强制重新认证一次
+            if ($lastState -ne 'portal-stale') { Write-Log '门户显示在线但实际无法上网（会话状态残留），尝试重新认证...'; $lastState = 'portal-stale' }
+            $w = Get-WlanLocal
+            if (-not $w) {
+                if ($Once) { Write-Log 'WLAN 未就绪，退出'; exit 1 }
+                Start-Sleep -Seconds 5
+                continue
+            }
+            $r = Try-Login -Wlan $w -IgnoreOnline
+            if ($r.Success) {
+                Write-Log ('重新认证成功: ' + $r.Message)
+                $fail = 0
+                $lastState = 'online'
+                if ($Once) { exit 0 }
+                Start-Sleep -Seconds 3
+            } else {
+                $fail++
+                Write-Log ('重新认证失败(' + $fail + '): ' + $r.Message)
+                if ($Once) { exit 1 }
+                $staleWaits = @(10, 30, 120, 300, 600)
+                $staleWait = $staleWaits[[Math]::Min($fail - 1, $staleWaits.Count - 1)]
+                Write-Log ('等待 ' + $staleWait + ' 秒后重试')
+                Start-Sleep -Seconds $staleWait
+            }
             continue
         }
         if ($st.State -eq 'Unreachable') {

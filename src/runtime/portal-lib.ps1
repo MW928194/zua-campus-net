@@ -270,16 +270,22 @@ function Complete-LoginUrl {
     return $Url
 }
 
-# 确认在线：门户状态 + 公网连通性（任一在线即可）
-function Test-Online {
-    $st = Get-PortalState
-    if ($st.State -eq 'Online') { return $true }
+# 真实互联网连通性：只看公网探测，不信任门户状态。
+# 用于识别"门户显示在线、但网关实际还在拦截"的残留会话（v1.2.3 修复）。
+function Test-InternetReachable {
     foreach ($u in @('http://connect.rom.miui.com/generate_204', 'http://www.msftconnecttest.com/connecttest.txt')) {
         try { $r = Invoke-Http -Url $u -NoRedirect -TimeoutSec 5 } catch { continue }
         if ($r.Status -eq 204 -and $u -match 'generate_204') { return $true }
         if ($r.Status -eq 200 -and $r.Content -match '(?i)Microsoft Connect Test') { return $true }
     }
     return $false
+}
+
+# 确认在线：优先真实联网，其次门户状态
+function Test-Online {
+    if (Test-InternetReachable) { return $true }
+    $st = Get-PortalState
+    return ($st.State -eq 'Online')
 }
 
 # 现场向认证服务器验证一次账号密码（安装 GUI / 诊断用；错误密码会返回 Ok=$false）
