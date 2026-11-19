@@ -55,8 +55,16 @@ if ($Diagnose) {
     foreach ($k in $script:cfg.Keys) { Write-Log ("  $k = " + ($script:cfg[$k] -join ', ')) }
     $w = Get-WlanLocal
     if ($w) { Write-Log "WLAN: IP=$($w.IP)  MAC=$($w.MAC)" } else { Write-Log 'WLAN: 未连接/无有效 IP' }
+    $ssid = Get-CurrentSsid
+    if ($ssid) {
+        $isCampus = Test-CampusSsid -Ssid $ssid
+        Write-Log ("当前 Wi-Fi: " + $ssid + "  （" + $(if ($isCampus) { '属于校园网' } else { '不是校园网，守护会待机' }) + "）")
+    } else {
+        Write-Log '当前 Wi-Fi: 未连接/读取不到 SSID'
+    }
     $st = Get-PortalState
     Write-Log "门户状态: $($st.State)"
+    Write-Log ("真实联网探测: " + $(if (Test-InternetReachable) { '可以上网' } else { '无法上网' }))
     if ($st.LoginUrl) { Write-Log "状态接口给的登录地址: $($st.LoginUrl)" }
     if ($st.Error) { Write-Log "状态接口错误: $($st.Error)" }
     if ($st.State -ne 'Online') {
@@ -198,9 +206,20 @@ if (-not $Once -and -not $Force) {
 
 $fail = 0
 $lastState = ''
-Write-Log 'watcher started v1.2.3'
+$lastHeartbeat = Get-Date
+$lastInternetCheck = Get-Date
+$ssidCache = ''
+$ssidCheckedAt = [datetime]::MinValue
+Write-Log 'watcher started v1.2.4'
 while ($true) {
     try {
+        # 心跳：每 6 小时记一条，便于确认守护进程是否还活着
+        if (((Get-Date) - $lastHeartbeat).TotalHours -ge 6) {
+            $hbSsid = '未知'
+            if ($ssidCache) { $hbSsid = $ssidCache }
+            Write-Log ('心跳：守护运行中（Wi-Fi=' + $hbSsid + '，状态=' + $lastState + '）')
+            $lastHeartbeat = Get-Date
+        }
         if ((Test-Path $script:PauseFile) -and -not $IgnorePause) {
             if ($lastState -ne 'paused') {
                 Write-Log '检测到 pause.flag，暂停自动登录'
@@ -210,16 +229,32 @@ while ($true) {
             Start-Sleep -Seconds 10
             continue
         }
+        # SSID 缓存（15 秒刷新一次）：只用于诊断提示和"是否在校园网"判断
+        if (((Get-Date) - $ssidCheckedAt).TotalSeconds -ge 15) {
+            $ssidCache = Get-CurrentSsid
+            $ssidCheckedAt = Get-Date
+        }
         $st = Get-PortalState
         if ($st.State -eq 'Online') {
-            # 二次确认：门户说在线，还要真的能上网（防止门户/BRAS 会话状态残留）
-            if (Test-InternetReachable) {
+            # 二次确认：门户说在线，还要真的能上网（防止门户/BRAS 会话状态残留）。
+            # 公网探测不必每轮都做，按 internetCheckSeconds 抽检，减少无谓请求。
+            $internetElapsed = ((Get-Date) - $lastInternetCheck).TotalSeconds
+            if ($internetElapsed -lt [int]$script:cfg.internetCheckSeconds) {
                 if ($lastState -ne 'online') { Write-Log '网络已在线'; $lastState = 'online' }
                 $fail = 0
                 if ($Once) { exit 0 }
                 Start-Sleep -Seconds ([int]$script:cfg.onlineCheckSeconds)
                 continue
             }
+            if (Test-InternetReachable) {
+                $lastInternetCheck = Get-Date
+                if ($lastState -ne 'online') { Write-Log '网络已在线'; $lastState = 'online' }
+                $fail = 0
+                if ($Once) { exit 0 }
+                Start-Sleep -Seconds ([int]$script:cfg.onlineCheckSeconds)
+                continue
+            }
+            $lastInternetCheck = Get-Date
             # 门户残留"在线"但实际被网关拦截：强制重新认证一次
             if ($lastState -ne 'portal-stale') { Write-Log '门户显示在线但实际无法上网（会话状态残留），尝试重新认证...'; $lastState = 'portal-stale' }
             $w = Get-WlanLocal
@@ -233,6 +268,7 @@ while ($true) {
                 Write-Log ('重新认证成功: ' + $r.Message)
                 $fail = 0
                 $lastState = 'online'
+                $lastInternetCheck = Get-Date
                 if ($Once) { exit 0 }
                 Start-Sleep -Seconds 3
             } else {
@@ -247,7 +283,25 @@ while ($true) {
             continue
         }
         if ($st.State -eq 'Unreachable') {
-            if ($lastState -ne 'unreachable') { Write-Log "认证服务器不可达（可能在等 Wi-Fi/获取 IP）: $($st.Error)"; $lastState = 'unreachable' }
+            $wInfo = Get-WlanLocal
+            $ipText = '无 IP'
+            if ($wInfo) { $ipText = $wInfo.IP }
+            # 明确不在校园网（例如切到手机热点）：低频探测 + 只提示一次，避免刷日志
+            if ($ssidCache -and -not (Test-CampusSsid -Ssid $ssidCache)) {
+                if ($lastState -ne ('off-campus:' + $ssidCache)) {
+                    Write-Log ("当前 Wi-Fi「" + $ssidCache + "」不是校园网，待机中（切回校园网后会自动登录）")
+                    $lastState = 'off-campus:' + $ssidCache
+                }
+                if ($Once) { Write-Log '当前不在校园网，退出'; exit 1 }
+                Start-Sleep -Seconds 15
+                continue
+            }
+            if ($lastState -ne 'unreachable') {
+                $ssidText = '未知'
+                if ($ssidCache) { $ssidText = $ssidCache }
+                Write-Log ("认证服务器不可达（Wi-Fi=" + $ssidText + "，IP=" + $ipText + "）: " + $st.Error)
+                $lastState = 'unreachable'
+            }
             if ($Once) { Write-Log '网络不可达，退出'; exit 1 }
             Start-Sleep -Seconds 5
             continue
@@ -265,6 +319,7 @@ while ($true) {
             Write-Log $r.Message
             $fail = 0
             $lastState = 'online'
+            $lastInternetCheck = Get-Date
             if ($Once) { exit 0 }
             Start-Sleep -Seconds 5
         } else {

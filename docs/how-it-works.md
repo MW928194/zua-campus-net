@@ -94,12 +94,40 @@ GET /webdisconnweb.do?wlanacname=ZZHK-ZAX-BRAS
   "wlanacname": "ZZHK-ZAX-BRAS",
   "wlanacip": "10.0.1.10",
   "wlanInterface": "WLAN",
-  "onlineCheckSeconds": 6,
+  "onlineCheckSeconds": 10,
+  "internetCheckSeconds": 60,
+  "campusSsids": ["ZUA-*"],
   "gatewayProbes": [
     "http://www.msftconnecttest.com/redirect",
     "http://connect.rom.miui.com/generate_204"
   ]
 }
+```
+
+| 配置项 | 说明 |
+|---|---|
+| `onlineCheckSeconds` | 在线时查询门户认证状态的间隔（秒），默认 10 |
+| `internetCheckSeconds` | 在线时抽检真实联网的间隔（秒），默认 60；用于识别"门户残留在线" |
+| `campusSsids` | 校园网 SSID 列表，支持 `*` 通配符（默认 `ZUA-*`）。当当前 SSID 不匹配且门户不可达时，判定为"不在校园网"并待机；留空 `[]` 则不做该判断 |
+| `wlanInterface` | 无线网卡名称，默认 `WLAN` |
+| `gatewayProbes` | 未认证时用于触发网关 302 的探测地址 |
+
+### 状态机概览（v1.2.4）
+
+```
+每轮循环：
+  [心跳]  每 6 小时记一条
+  [暂停]  存在 pause.flag → 等待（-Once 模式直接退出）
+  [SSID]  每 15 秒刷新一次当前 Wi-Fi 名
+  门户状态？
+    ├─ Online  → 距上次公网抽检 < internetCheckSeconds → 视为在线，睡 onlineCheckSeconds
+    │            └─ 到点了 → 真实联网探测
+    │                  ├─ 通  → 在线
+    │                  └─ 不通 → 判定"门户残留在线"，强制重新认证（退避 10/30/120/300/600s）
+    ├─ Unreachable
+    │     ├─ SSID 已知且不属于 campusSsids → 「不是校园网，待机中」，15 秒后再看
+    │     └─ 否则 → 记录 Wi-Fi/IP 及错误，5 秒后重试
+    └─ Offline/Unknown → 抓登录页 → 填表 → POST → 复查真实联网
 ```
 
 ## 四、适配其他学校

@@ -9,12 +9,14 @@ $script:EncUtf8 = New-Object System.Text.UTF8Encoding($false)
 
 function Get-DefaultCfg {
     $c = [ordered]@{
-        portalHost         = '202.196.169.166'
-        wlanacname         = 'ZZHK-ZAX-BRAS'
-        wlanacip           = '10.0.1.10'
-        wlanInterface      = 'WLAN'
-        onlineCheckSeconds = 6
-        gatewayProbes      = @(
+        portalHost            = '202.196.169.166'
+        wlanacname            = 'ZZHK-ZAX-BRAS'
+        wlanacip              = '10.0.1.10'
+        wlanInterface         = 'WLAN'
+        onlineCheckSeconds    = 10
+        internetCheckSeconds  = 60
+        campusSsids           = @('ZUA-*')
+        gatewayProbes         = @(
             'http://www.msftconnecttest.com/redirect',
             'http://connect.rom.miui.com/generate_204'
         )
@@ -268,6 +270,40 @@ function Complete-LoginUrl {
         $Url = $Url + $sep + ($add -join '&')
     }
     return $Url
+}
+
+# 读取当前 Wi-Fi 的 SSID。优先 netsh（真实 SSID，约 130ms）；
+# 若拿不到（例如 SYSTEM 会话下 netsh 受限），退回 Get-NetConnectionProfile（名称可能带 " 2" 后缀，通配符可匹配）。
+function Get-CurrentSsid {
+    try {
+        $out = (& netsh wlan show interfaces 2>$null | Out-String)
+        $m = [regex]::Match($out, '(?m)^\s*SSID\s*:\s*(.+?)\s*$')
+        if ($m.Success) {
+            $ssid = $m.Groups[1].Value.Trim()
+            if ($ssid) { return $ssid }
+        }
+    } catch {}
+    try {
+        $alias = [string]$script:cfg.wlanInterface
+        $cp = Get-NetConnectionProfile -ErrorAction SilentlyContinue |
+            Where-Object { $_.InterfaceAlias -eq $alias } |
+            Select-Object -First 1
+        if ($cp -and $cp.Name) { return [string]$cp.Name }
+    } catch {}
+    return ''
+}
+
+# SSID 是否属于校园网（支持 * 通配符）。列表为空或 SSID 未知时返回 $true（不阻止任何行为）
+function Test-CampusSsid {
+    param([string]$Ssid)
+    if (-not $Ssid) { return $true }
+    $list = @($script:cfg.campusSsids)
+    if ($list.Count -eq 0) { return $true }
+    foreach ($p in $list) {
+        if (-not $p) { continue }
+        if ($Ssid -like $p) { return $true }
+    }
+    return $false
 }
 
 # 真实互联网连通性：只看公网探测，不信任门户状态。
